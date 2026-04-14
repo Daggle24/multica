@@ -46,6 +46,183 @@ import { FileViewer } from "./file-viewer";
 // Create Skill Dialog
 // ---------------------------------------------------------------------------
 
+type LocalFolderFile = {
+  path: string;
+  file: File;
+};
+
+/** Drag-and-drop item with optional webkit directory entry API (not in all TS DOM typings). */
+type LocalDataTransferItem = Omit<DataTransferItem, "webkitGetAsEntry"> & {
+  webkitGetAsEntry?: () => LocalFileSystemEntry | null;
+};
+
+interface LocalFileSystemEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  fullPath: string;
+}
+
+interface LocalFileSystemFileEntry extends LocalFileSystemEntry {
+  file: (
+    successCallback: (file: File) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+}
+
+interface LocalFileSystemDirectoryEntry extends LocalFileSystemEntry {
+  createReader: () => LocalFileSystemDirectoryReader;
+}
+
+interface LocalFileSystemDirectoryReader {
+  readEntries: (
+    successCallback: (entries: LocalFileSystemEntry[]) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+}
+
+function normalizePath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/")
+    .trim();
+}
+
+function inferRootFolderName(files: LocalFolderFile[]): string {
+  const firstSegments = files
+    .map((f) => normalizePath(f.path).split("/").filter(Boolean)[0] ?? "")
+    .filter(Boolean);
+
+  if (firstSegments.length === 0) return "imported-skill";
+
+  const candidate = firstSegments[0]!;
+  if (firstSegments.every((segment) => segment === candidate)) return candidate;
+
+  return "imported-skill";
+}
+
+function toDefaultSkillName(folderName: string): string {
+  return folderName
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripRoot(path: string, root: string): string {
+  const normalized = normalizePath(path);
+  if (!root) return normalized;
+  const prefix = `${root}/`;
+  if (normalized === root) return "";
+  if (normalized.startsWith(prefix)) return normalized.slice(prefix.length);
+  return normalized;
+}
+
+function fileListToLocalFolderFiles(fileList: FileList): LocalFolderFile[] {
+  return Array.from(fileList).map((file) => ({
+    path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+    file,
+  }));
+}
+
+function readFileEntry(entry: LocalFileSystemFileEntry): Promise<LocalFolderFile> {
+  return new Promise((resolve, reject) => {
+    entry.file(
+      (file) => {
+        resolve({
+          path: normalizePath(entry.fullPath || file.name),
+          file,
+        });
+      },
+      (error) => reject(error),
+    );
+  });
+}
+
+function readDirectoryEntries(entry: LocalFileSystemDirectoryEntry): Promise<LocalFileSystemEntry[]> {
+  const reader = entry.createReader();
+  return new Promise((resolve, reject) => {
+    const collected: LocalFileSystemEntry[] = [];
+    const readNext = () => {
+      reader.readEntries(
+        (entries) => {
+          if (!entries.length) {
+            resolve(collected);
+            return;
+          }
+          collected.push(...entries);
+          readNext();
+        },
+        (error) => reject(error),
+      );
+    };
+    readNext();
+  });
+}
+
+async function readEntryRecursive(entry: LocalFileSystemEntry): Promise<LocalFolderFile[]> {
+  if (entry.isFile) {
+    return [await readFileEntry(entry as LocalFileSystemFileEntry)];
+  }
+  if (entry.isDirectory) {
+    const children = await readDirectoryEntries(entry as LocalFileSystemDirectoryEntry);
+    const nested = await Promise.all(children.map((child) => readEntryRecursive(child)));
+    return nested.flat();
+  }
+  return [];
+}
+
+async function extractDroppedFolderFiles(event: DragEvent<HTMLDivElement>): Promise<LocalFolderFile[]> {
+  const items = Array.from(event.dataTransfer.items ?? []);
+  const entries = items
+    .map((item) => (item as LocalDataTransferItem).webkitGetAsEntry?.() ?? null)
+    .filter((entry): entry is LocalFileSystemEntry => Boolean(entry));
+
+  if (entries.length > 0) {
+    const nested = await Promise.all(entries.map((entry) => readEntryRecursive(entry)));
+    return nested.flat();
+  }
+
+  return Array.from(event.dataTransfer.files).map((file) => ({
+    path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+    file,
+  }));
+}
+
+async function buildSkillFromLocalFolder(
+  files: LocalFolderFile[],
+  name: string,
+  description: string,
+): Promise<CreateSkillRequest> {
+  if (files.length === 0) {
+    throw new Error("Please drop or select a skill folder first.");
+  }
+
+  const root = inferRootFolderName(files);
+  const contentByPath = await Promise.all(
+    files.map(async ({ path, file }) => {
+      const relativePath = normalizePath(stripRoot(path, root));
+      return { path: relativePath, content: await file.text() };
+    }),
+  );
+
+  const normalizedFiles = contentByPath.filter((f) => f.path !== "");
+  const skillMainFile = normalizedFiles.find((f) => f.path.toLowerCase() === "skill.md");
+  if (!skillMainFile) {
+    throw new Error("The folder must include a SKILL.md file.");
+  }
+
+  const supportingFiles = normalizedFiles.filter((f) => f.path.toLowerCase() !== "skill.md");
+  const skillName = name.trim() || toDefaultSkillName(root) || "imported-skill";
+
+  return {
+    name: skillName,
+    description: description.trim(),
+    content: skillMainFile.content,
+    files: supportingFiles,
+  };
+}
+
 function CreateSkillDialog({
   onClose,
   onCreate,
@@ -642,6 +819,13 @@ export default function SkillsPage() {
     qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) });
     setSelectedId(skill.id);
     toast.success("Skill imported");
+  };
+
+  const handleImportFolder = async (data: CreateSkillRequest) => {
+    const skill = await api.createSkill(data);
+    qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) });
+    setSelectedId(skill.id);
+    toast.success("Skill imported from folder");
   };
 
   const handleUpdate = async (id: string, data: UpdateSkillRequest) => {
