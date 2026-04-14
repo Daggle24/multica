@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
   Sparkles,
@@ -172,7 +173,7 @@ async function readEntryRecursive(entry: LocalFileSystemEntry): Promise<LocalFol
   return [];
 }
 
-async function extractDroppedFolderFiles(event: DragEvent<HTMLDivElement>): Promise<LocalFolderFile[]> {
+async function extractDroppedFolderFiles(event: ReactDragEvent<HTMLDivElement>): Promise<LocalFolderFile[]> {
   const items = Array.from(event.dataTransfer.items ?? []);
   const entries = items
     .map((item) => (item as LocalDataTransferItem).webkitGetAsEntry?.() ?? null)
