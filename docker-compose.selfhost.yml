@@ -63,13 +63,6 @@ services:
     environment:
       HOSTNAME: "0.0.0.0"
 
-<<<<<<< HEAD
 volumes:
   pgdata:
   backend_uploads:
-=======
-networks:
-  external_postgres:
-    name: ${POSTGRES_DOCKER_NETWORK:-agents-for-business-backend_afb-network}
-    external: true
->>>>>>> 13b77ffa (postgres changed)
