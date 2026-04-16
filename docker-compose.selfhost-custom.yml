@@ -27,8 +27,6 @@ services:
       - external_postgres
     ports:
       - "${PORT:-8080}:8080"
-    volumes:
-      - backend_uploads:/app/data/uploads
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@${POSTGRES_DOCKER_HOST:-afb-postgres}:5432/${POSTGRES_DB:-multica}?sslmode=${POSTGRES_SSLMODE:-disable}
       PORT: "8080"
@@ -63,13 +61,7 @@ services:
     environment:
       HOSTNAME: "0.0.0.0"
 
-<<<<<<< HEAD
-volumes:
-  pgdata:
-  backend_uploads:
-=======
 networks:
   external_postgres:
     name: ${POSTGRES_DOCKER_NETWORK:-agents-for-business-backend_afb-network}
     external: true
->>>>>>> 13b77ffa (postgres changed)
